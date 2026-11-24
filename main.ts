@@ -10,7 +10,8 @@
 // The model in one line: a protocol's implied value is its TVL priced at the
 // median market-cap/TVL multiple of the live-token protocols in its own
 // category, adjusted for its 7-day growth, for how long it has run with no
-// token, and for its chain reach. The dashboard restates the model in full.
+// token, for its chain reach, for its category's momentum, and for its own
+// velocity against that category. The dashboard restates the model in full.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../token-radar-01-kit/input/snapshot.json

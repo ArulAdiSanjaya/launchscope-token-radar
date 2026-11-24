@@ -60,7 +60,8 @@
     var age = row.age_days === null ? M.unknown_age_days : row.age_days;
     var range = sb ? M.endurance_range * sb.endurance : M.endurance_range;
     var enduranceMult = M.endurance_floor + (clamp(age, 0, M.endurance_days) / M.endurance_days) * range;
-    return Math.max(1, Math.round(row.tvl_usd * multiple * growthMult * enduranceMult * row.model.reach_multiplier * row.model.momentum_multiplier));
+    var relMult = sb ? 1 + (clamp(row.model.relative_pct, M.growth_floor, M.growth_cap) / 100) * sb.relative : row.model.relative_multiplier;
+    return Math.max(1, Math.round(row.tvl_usd * multiple * growthMult * enduranceMult * row.model.reach_multiplier * row.model.momentum_multiplier * relMult));
   }
 
   /* ---------- routing / state ---------- */
@@ -177,6 +178,7 @@
     var byTvl = DATA.rows.slice().sort(function (a, b) { return b.tvl_usd - a.tvl_usd; })[0];
     var fresh = DATA.rows.filter(function (r) { return r.age_days !== null && r.age_days <= 120; }).sort(function (a, b) { return b.implied_value_usd - a.implied_value_usd; })[0];
     var hotCat = DATA.categories.filter(function (c) { return c.board_protocols > 0 && c.median_change_7d !== null; }).sort(function (a, b) { return b.median_change_7d - a.median_change_7d; })[0];
+    var gainer = DATA.rows.slice().sort(function (a, b) { return b.model.relative_pct - a.model.relative_pct; })[0];
     function card(cls, k, row, d, fn) {
       return el('button', { type: 'button', class: 'signal ' + cls, onclick: fn }, [
         el('div', { class: 'k', text: k }), el('div', { class: 'v', text: row.name }), el('div', { class: 'd', text: d(row) }),
@@ -187,6 +189,7 @@
       card('amber', 'Signal · largest tokenless TVL', byTvl, function (r) { return fmtUsd(r.tvl_usd) + ' TVL · no token recorded'; }, function () { go('#/p/' + encodeURIComponent(byTvl.slug)); }),
       card('blue', 'Signal · fresh listing', fresh, function (r) { return 'tracked for ' + fmtAge(r.age_days) + ' · implied ' + fmtUsd(r.implied_value_usd); }, function () { state.sort = 'age'; state.dir = -1; go(boardHash()); }),
       hotCat ? card('blue', 'Signal · hottest category', { name: hotCat.category }, function () { return 'live ' + hotCat.category + ' protocols ' + fmtPct(hotCat.median_change_7d) + ' in 7d · ' + hotCat.board_protocols + ' on the board'; }, function () { state.cat = hotCat.category; state.tier = 'all'; go(boardHash()); }) : null,
+      card('green', 'Signal · gaining share fastest', gainer, function (r) { return fmtPct(r.model.relative_pct) + ' vs its own sector in 7d · implied ' + fmtUsd(r.implied_value_usd); }, function () { go('#/p/' + encodeURIComponent(gainer.slug)); }),
     ]);
   }
   function boardView() {
@@ -261,6 +264,7 @@
     if (r.chains.length <= 1) notes.push(['amber', 'Single-chain presence: the reach factor is at its floor. A launch, if it comes, likely starts and ends on ' + (r.chains[0] || 'one chain') + '.']);
     if (r.model.multiple_source === 'global') notes.push(['amber', 'Thin comp set: ' + (r.category || 'its category') + ' has ' + (r.model.comps_used === 0 ? 'no live-token protocols' : 'only ' + r.model.comps_used + ' live comp' + (r.model.comps_used === 1 ? '' : 's')) + ' in the snapshot, so the implied value uses the global median multiple (' + DATA.global_multiple + '\u00D7 TVL) instead of a category price. Read it as rougher than its neighbours.']);
     if (r.model.category_momentum_pct < -10) notes.push(['red', 'Cooling category: live ' + (r.category || 'Uncategorised') + ' protocols fell ' + fmtPct(r.model.category_momentum_pct) + ' in 7 days, so the momentum factor already discounts the implied value. A sector losing TVL can still launch a token — but it launches into a headwind.']);
+    if (r.model.relative_pct < -10) notes.push(['red', 'Losing share inside its own sector: this protocol grew ' + fmtPct(r.model.relative_pct) + ' against live ' + (r.category || 'Uncategorised') + ' protocols over 7 days, so the relative-velocity factor discounts it even when its absolute growth looks fine. Users are choosing its sector peers over it.']);
     if (r.implied_value_usd / r.tvl_usd > 2) notes.push(['red', 'Rich implied multiple: the model prices this launch above 2\u00D7 current TVL. That is the category\u2019s market price carried over, not a promise — small errors in the multiple move this value a lot.']);
     if (notes.length === 0) notes.push(['amber', 'No structural flags: size, growth, age and reach are all inside the ranges the model handles well. The standing risk remains — the snapshot records no token, which is not proof none exists, and no model can say whether or when one is issued.']);
     return notes;
@@ -296,6 +300,7 @@
         kv('Endurance factor', '\u00D7' + r.model.endurance_multiplier + ' (' + fmtAge(r.age_days) + ' with no token)'),
         kv('Reach factor', '\u00D7' + r.model.reach_multiplier + ' (' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + ': ' + (r.chains.join(', ') || 'none recorded') + ')'),
         kv('Category momentum', '\u00D7' + r.model.momentum_multiplier + ' (live ' + (r.category || 'Uncategorised') + ' protocols moved ' + fmtPct(r.model.category_momentum_pct) + ' in 7 days' + (r.model.momentum_source === 'category' ? ', median of ' + r.model.momentum_comps + ' live comps' : ', the global median: too few live comps in this category') + ')'),
+        kv('Relative velocity', '\u00D7' + r.model.relative_multiplier + ' (its own 7d change ' + fmtPct(r.change_7d) + ' against the sector median ' + fmtPct(r.model.category_momentum_pct) + ' = ' + fmtPct(r.model.relative_pct) + ' of share gained or lost, weight ' + M.relative_weight + (r.change_7d === null ? '; no 7d change reported, so no adjustment' : '') + ')'),
         kv('Implied value', fmtUsd(r.implied_value_usd)),
       ]),
       el('h2', { class: 'sec', text: 'Radar score breakdown' }),
@@ -336,7 +341,7 @@
   }
 
   /* ---------- model view ---------- */
-  var sb = { growth: M.growth_weight, endurance: 1, blend: 1 };
+  var sb = { growth: M.growth_weight, endurance: 1, blend: 1, relative: M.relative_weight };
   function modelView() {
     var top10 = el('div', {});
     function drawTop() {
@@ -356,11 +361,12 @@
       el('h2', { class: 'sec', text: 'The model, in full — ' + DATA.model_version }),
       el('div', { class: 'formula' }, [
         document.createTextNode('multiple(category) = median market-cap / TVL of the live-token protocols in it (global median '), el('b', { text: DATA.global_multiple + '\u00D7' }), document.createTextNode(' when a category has under ' + M.min_category_comps + ' comps), clamped to [' + M.multiple_floor + ', ' + M.multiple_cap + ']'),
-        el('br'), document.createTextNode('implied = TVL \u00D7 multiple \u00D7 '), el('b', { text: 'growth' }), document.createTextNode(' \u00D7 '), el('b', { text: 'endurance' }), document.createTextNode(' \u00D7 '), el('b', { text: 'reach' }), document.createTextNode(' \u00D7 '), el('b', { text: 'momentum' }),
+        el('br'), document.createTextNode('implied = TVL \u00D7 multiple \u00D7 '), el('b', { text: 'growth' }), document.createTextNode(' \u00D7 '), el('b', { text: 'endurance' }), document.createTextNode(' \u00D7 '), el('b', { text: 'reach' }), document.createTextNode(' \u00D7 '), el('b', { text: 'momentum' }), document.createTextNode(' \u00D7 '), el('b', { text: 'relative' }),
         el('br'), document.createTextNode('growth = 1 + clamp(7d change, ' + M.growth_floor + ', ' + M.growth_cap + ') / 100 \u00D7 ' + M.growth_weight),
         el('br'), document.createTextNode('endurance = ' + M.endurance_floor + ' + ' + M.endurance_range + ' \u00D7 min(tokenless days, ' + M.endurance_days + ') / ' + M.endurance_days + '  (unknown age counts ' + M.unknown_age_days + ' days)'),
         el('br'), document.createTextNode('reach = 1 + ' + M.reach_per_chain + ' \u00D7 min(chains \u2212 1, ' + M.reach_max_extra_chains + ')'),
         el('br'), document.createTextNode('momentum = 1 + clamp(category 7d change, ' + M.growth_floor + ', ' + M.growth_cap + ') / 100 \u00D7 ' + M.momentum_weight + '  (median 7d TVL change of the category\u2019s live-token protocols; the global median ' + fmtPct(DATA.global_momentum_pct) + ' when a category has under ' + M.min_category_comps + ' live comps reporting one)'),
+        el('br'), document.createTextNode('relative = 1 + clamp(own 7d change \u2212 category 7d change, ' + M.growth_floor + ', ' + M.growth_cap + ') / 100 \u00D7 ' + M.relative_weight + '  (share gained or lost against the sector; 0 when the snapshot reports no 7d change for the protocol — growth rewards absolute momentum, relative rewards winning share)'),
       ]),
       el('p', { class: 'note', text: 'One function scores every protocol; no name is special-cased and no row is hand-picked. The board covers all ' + DATA.watchlist_size + ' watchlist protocols and adds ' + DATA.early_size + ' early finds below the ' + fmtUsd(DATA.floor_usd) + ' floor, excluding wrapped, staked, bridged and versioned products of tokens that already trade. The radar score (size 30, momentum 20, endurance 20, category heat 20, reach 10) grades launch readiness and never changes the ranking, which is by implied value alone.' }),
       el('h2', { class: 'sec', text: 'Re-run it yourself — the sandbox' }),
@@ -369,6 +375,7 @@
         slider('Growth weight', 'growth', 0, 1, 0.05, function (v) { return v.toFixed(2); }),
         slider('Endurance strength', 'endurance', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
         slider('Category blend (0 = global multiple)', 'blend', 0, 1, 0.05, function (v) { return Math.round(v * 100) + '%'; }),
+        slider('Relative velocity weight', 'relative', 0, 0.5, 0.05, function (v) { return v.toFixed(2); }),
       ]),
       top10,
       el('h2', { class: 'sec', text: 'Category multiples — the market\u2019s own prices, from this snapshot' }),

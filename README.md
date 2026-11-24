@@ -12,24 +12,37 @@ snapshot carries — the early finds below the $50M floor are the point of a
 radar — while protocols whose token already trades are kept apart in a Live
 view and never ranked.
 
-**The model** (version `launchscope-3`, restated in full inside the
+**The model** (version `launchscope-4`, restated in full inside the
 dashboard): the market itself prices each category. For every live-token
 protocol in the snapshot, market cap ÷ TVL is computed; a category's multiple
 is the median of its live protocols. A pre-token protocol's implied value is
 then
 
 ```
-implied = TVL × category multiple × growth × endurance × reach × momentum
+implied = TVL × category multiple × growth × endurance × reach × momentum × relative
 growth    = 1 + clamp(7-day TVL change, −50, +100)/100 × 0.6
 endurance = 0.72 + 0.28 × min(days with no token, 1460)/1460
 reach     = 1 + 0.02 × min(chains − 1, 5)
 momentum  = 1 + clamp(category 7-day change, −50, +100)/100 × 0.3
+relative  = 1 + clamp(own 7-day change − category 7-day change, −50, +100)/100 × 0.2
 ```
 
 The momentum factor is the category's own direction of travel: the median
 7-day TVL change of its live-token protocols (the global median when a
 category has too few live comps reporting one). A sector whose live tokens are
 growing lifts its pre-token names; a cooling sector discounts them.
+
+The relative factor is the protocol's own velocity against that sector: its
+7-day TVL change minus the category's median live-token change. Growth
+rewards absolute momentum; relative rewards winning share — a protocol
+outgrowing its own sector rises above a peer that merely rides the sector's
+tide, and one lagging its sector is discounted even when its absolute growth
+looks fine. A protocol the snapshot gives no 7-day change for carries no
+adjustment here (0), rather than borrowing its sector's move. On this
+snapshot the factor re-ranks 92 of 198 rows (top 10 unchanged): the biggest
+movers are protocols whose own growth diverges most from their sector, e.g.
+Anemoy Capital #84 → #98 (−72.7% own vs −1.0% sector) and Theo Network
+#94 → #83 (+94.0% own vs −1.0% sector).
 
 Alongside the value, each row carries a 0–100 radar score for launch
 readiness (size, momentum, endurance, category heat, reach). The score never
@@ -39,8 +52,9 @@ model page lets a reader re-run the ranking with different weights, live.
 
 **The dashboard** is a static page with no framework and no network: a
 sortable, filterable board (search, category, chain, watchlist/early tiers,
-plus four signal cards for the fastest riser, the largest tokenless TVL, a
-fresh listing and the hottest category by live-token momentum), a detail view per protocol with the full model breakdown,
+plus five signal cards for the fastest riser, the largest tokenless TVL, a
+fresh listing, the hottest category by live-token momentum, and the protocol
+gaining share fastest against its own sector), a detail view per protocol with the full model breakdown,
 generated risk notes, its live category comps and a seven-step farm plan with
 a cost and a time on every step, a Live tokens view, and the model page with
 the category-multiple table and sandbox.

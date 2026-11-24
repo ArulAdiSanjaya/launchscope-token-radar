@@ -23,7 +23,14 @@
 //                 momentumMult = 1 + clamp(momentum, -50, 100)/100 x 0.3, so a
 //                 sector whose live tokens are growing lifts its pre-token
 //                 names, and a cooling sector discounts them
-//   implied     = max(1, round(base x growthMult x endurance x reach x momentumMult))
+//   relative     = the protocol's own velocity against its sector: its 7-day TVL
+//                 change minus the category momentum above (0 when the snapshot
+//                 reports no 7-day change for it);
+//                 relativeMult = 1 + clamp(relative, -50, 100)/100 x 0.2, so a
+//                 protocol gaining share inside its own sector rises above a
+//                 peer that merely rides the sector's tide — growth rewards
+//                 absolute momentum, relative rewards winning share
+//   implied     = max(1, round(base x growthMult x endurance x reach x momentumMult x relativeMult))
 //
 // A separate radar score (0-100) grades launch readiness from size, momentum,
 // endurance, reach and category heat. It is shown beside the value, never used
@@ -70,6 +77,7 @@ export interface ModelConstants {
   multiple_cap: number;
   min_category_comps: number;
   momentum_weight: number;
+  relative_weight: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -86,10 +94,11 @@ export const MODEL: ModelConstants = {
   multiple_cap: 2.5,
   min_category_comps: 3,
   momentum_weight: 0.3,
+  relative_weight: 0.2,
 };
 
 /** The model's version label: the dashboard names it and board.json carries it. */
-export const MODEL_VERSION = 'launchscope-3';
+export const MODEL_VERSION = 'launchscope-4';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 30;
@@ -125,6 +134,8 @@ export interface BoardRow {
     momentum_multiplier: number;
     momentum_source: 'category' | 'global';
     momentum_comps: number;
+    relative_pct: number;
+    relative_multiplier: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -319,7 +330,7 @@ export function impliedValue(
   multiples: Multiples,
   momentum: Momentum,
   model: ModelConstants = MODEL,
-): { implied: number; multiple: number; comps: number; source: 'category' | 'global'; growthPct: number; growthMult: number; enduranceMult: number; reachMult: number; momentumPct: number; momentumMult: number; momentumSource: 'category' | 'global'; momentumComps: number; age: number | null } {
+): { implied: number; multiple: number; comps: number; source: 'category' | 'global'; growthPct: number; growthMult: number; enduranceMult: number; reachMult: number; momentumPct: number; momentumMult: number; momentumSource: 'category' | 'global'; momentumComps: number; relativePct: number; relativeMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const { multiple, comps, source } = multipleFor(protocol, multiples);
   const growthPct = clamp(finite(protocol.change_7d, 0), model.growth_floor, model.growth_cap);
@@ -330,8 +341,15 @@ export function impliedValue(
   const mom = momentumFor(protocol, momentum);
   const momentumPct = clamp(mom.momentum, model.growth_floor, model.growth_cap);
   const momentumMult = 1 + (momentumPct / 100) * model.momentum_weight;
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * enduranceMult * reachMult * momentumMult));
-  return { implied, multiple, comps, source, growthPct, growthMult, enduranceMult, reachMult, momentumPct, momentumMult, momentumSource: mom.source, momentumComps: mom.comps, age };
+  // Relative velocity: the protocol's own 7-day change against its sector's
+  // median live-token change. A protocol with no reported 7-day change carries
+  // no signal here (0), rather than borrowing its sector's move.
+  const relativePct = protocol.change_7d === null || !Number.isFinite(protocol.change_7d)
+    ? 0
+    : clamp(protocol.change_7d - mom.momentum, model.growth_floor, model.growth_cap);
+  const relativeMult = 1 + (relativePct / 100) * model.relative_weight;
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * enduranceMult * reachMult * momentumMult * relativeMult));
+  return { implied, multiple, comps, source, growthPct, growthMult, enduranceMult, reachMult, momentumPct, momentumMult, momentumSource: mom.source, momentumComps: mom.comps, relativePct, relativeMult, age };
 }
 
 /** The radar score's five parts and their sum: launch readiness, 0 to 100. */
@@ -519,6 +537,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       momentum_multiplier: round4(row.v.momentumMult),
       momentum_source: row.v.momentumSource,
       momentum_comps: row.v.momentumComps,
+      relative_pct: round4(row.v.relativePct),
+      relative_multiplier: round4(row.v.relativeMult),
       age_days: row.v.age,
     },
     farm_steps: farmSteps(row.p, row.v.age),
