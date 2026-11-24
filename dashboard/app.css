@@ -51,7 +51,7 @@ nav.tabs button {
 nav.tabs button[aria-pressed="true"] { background: var(--panel-2); color: var(--green); border-color: var(--green-dim); font-weight: 600; }
 
 /* Signal strip */
-.signals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0 4px; }
+.signals { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 18px 0 4px; }
 .signal { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 8px; padding: 12px 14px; cursor: pointer; text-align: left; width: 100%; }
 .signal:hover { border-color: var(--green-dim); }
 .signal.amber { border-left-color: var(--amber); }

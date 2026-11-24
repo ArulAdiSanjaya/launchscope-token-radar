@@ -12,18 +12,24 @@ snapshot carries — the early finds below the $50M floor are the point of a
 radar — while protocols whose token already trades are kept apart in a Live
 view and never ranked.
 
-**The model** (version `launchscope-2`, restated in full inside the
+**The model** (version `launchscope-3`, restated in full inside the
 dashboard): the market itself prices each category. For every live-token
 protocol in the snapshot, market cap ÷ TVL is computed; a category's multiple
 is the median of its live protocols. A pre-token protocol's implied value is
 then
 
 ```
-implied = TVL × category multiple × growth × endurance × reach
+implied = TVL × category multiple × growth × endurance × reach × momentum
 growth    = 1 + clamp(7-day TVL change, −50, +100)/100 × 0.6
 endurance = 0.72 + 0.28 × min(days with no token, 1460)/1460
 reach     = 1 + 0.02 × min(chains − 1, 5)
+momentum  = 1 + clamp(category 7-day change, −50, +100)/100 × 0.3
 ```
+
+The momentum factor is the category's own direction of travel: the median
+7-day TVL change of its live-token protocols (the global median when a
+category has too few live comps reporting one). A sector whose live tokens are
+growing lifts its pre-token names; a cooling sector discounts them.
 
 Alongside the value, each row carries a 0–100 radar score for launch
 readiness (size, momentum, endurance, category heat, reach). The score never
@@ -33,8 +39,8 @@ model page lets a reader re-run the ranking with different weights, live.
 
 **The dashboard** is a static page with no framework and no network: a
 sortable, filterable board (search, category, chain, watchlist/early tiers,
-plus three signal cards for the fastest riser, the largest tokenless TVL and
-a fresh listing), a detail view per protocol with the full model breakdown,
+plus four signal cards for the fastest riser, the largest tokenless TVL, a
+fresh listing and the hottest category by live-token momentum), a detail view per protocol with the full model breakdown,
 generated risk notes, its live category comps and a seven-step farm plan with
 a cost and a time on every step, a Live tokens view, and the model page with
 the category-multiple table and sandbox.

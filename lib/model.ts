@@ -17,7 +17,13 @@
 //                 run for years at size with no token is a stronger launch
 //                 candidate than a week-old one (unknown age counts as 365 days)
 //   reach       = 1 + 0.02 x min(chains - 1, 5) — multi-chain presence, capped
-//   implied     = max(1, round(base x growthMult x endurance x reach))
+//   momentum    = the category's own direction of travel: the median 7-day TVL
+//                 change of its live-token protocols (the global median when a
+//                 category has too few live comps reporting one);
+//                 momentumMult = 1 + clamp(momentum, -50, 100)/100 x 0.3, so a
+//                 sector whose live tokens are growing lifts its pre-token
+//                 names, and a cooling sector discounts them
+//   implied     = max(1, round(base x growthMult x endurance x reach x momentumMult))
 //
 // A separate radar score (0-100) grades launch readiness from size, momentum,
 // endurance, reach and category heat. It is shown beside the value, never used
@@ -63,6 +69,7 @@ export interface ModelConstants {
   multiple_floor: number;
   multiple_cap: number;
   min_category_comps: number;
+  momentum_weight: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -78,10 +85,11 @@ export const MODEL: ModelConstants = {
   multiple_floor: 0.04,
   multiple_cap: 2.5,
   min_category_comps: 3,
+  momentum_weight: 0.3,
 };
 
 /** The model's version label: the dashboard names it and board.json carries it. */
-export const MODEL_VERSION = 'launchscope-2';
+export const MODEL_VERSION = 'launchscope-3';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 30;
@@ -113,6 +121,10 @@ export interface BoardRow {
     growth_multiplier: number;
     endurance_multiplier: number;
     reach_multiplier: number;
+    category_momentum_pct: number;
+    momentum_multiplier: number;
+    momentum_source: 'category' | 'global';
+    momentum_comps: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -131,12 +143,14 @@ export interface LiveRow {
   tvl_multiple: number | null;
 }
 
-/** One category's comp set: how the market prices that sector's TVL today. */
+/** One category's comp set: how the market prices that sector's TVL today, and how fast its live tokens' TVL is moving. */
 export interface CategoryStat {
   category: string;
   live_protocols: number;
   median_multiple: number;
   board_protocols: number;
+  median_change_7d: number | null;
+  momentum_source: 'category' | 'global';
 }
 
 /** Everything the dashboard renders, written to data.js by main.ts. */
@@ -147,6 +161,7 @@ export interface RadarData {
   model: ModelConstants;
   model_version: string;
   global_multiple: number;
+  global_momentum_pct: number;
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -249,6 +264,48 @@ export function compMultiples(snapshot: Snapshot, model: ModelConstants = MODEL)
   return { global, byCategory };
 }
 
+/** The category momentum the snapshot's live-token protocols imply, global and per category. */
+export interface Momentum {
+  global: number;
+  byCategory: Map<string, { momentum: number; comps: number; source: 'category' | 'global' }>;
+}
+
+/**
+ * Category momentum: the median 7-day TVL change of the live-token protocols
+ * in a category — the sector's own direction of travel, priced by the market
+ * the same way the category multiple is. A category with too few live comps
+ * reporting a 7-day change falls back to the global median, so no protocol is
+ * priced on a single noisy reading.
+ */
+export function categoryMomentum(snapshot: Snapshot, model: ModelConstants = MODEL): Momentum {
+  const changesByCategory = new Map<string, number[]>();
+  const all: number[] = [];
+  for (const p of snapshot.protocols) {
+    if (isPreToken(p) || p.change_7d === null || !Number.isFinite(p.change_7d)) continue;
+    all.push(p.change_7d);
+    const key = p.category ?? 'Uncategorised';
+    const list = changesByCategory.get(key) ?? [];
+    list.push(p.change_7d);
+    changesByCategory.set(key, list);
+  }
+  const global = median(all) ?? 0;
+  const byCategory = new Map<string, { momentum: number; comps: number; source: 'category' | 'global' }>();
+  for (const [key, changes] of changesByCategory) {
+    if (changes.length >= model.min_category_comps) {
+      byCategory.set(key, { momentum: median(changes)!, comps: changes.length, source: 'category' });
+    } else {
+      byCategory.set(key, { momentum: global, comps: changes.length, source: 'global' });
+    }
+  }
+  return { global, byCategory };
+}
+
+/** The momentum one protocol is priced with, how many live comps stand behind it, and which price it is. */
+function momentumFor(p: SnapshotProtocol, momentum: Momentum): { momentum: number; comps: number; source: 'category' | 'global' } {
+  const hit = momentum.byCategory.get(p.category ?? 'Uncategorised');
+  return hit ?? { momentum: momentum.global, comps: 0, source: 'global' };
+}
+
 /** The multiple one protocol is priced with, how many live comps stand behind it, and which price it is. */
 function multipleFor(p: SnapshotProtocol, multiples: Multiples): { multiple: number; comps: number; source: 'category' | 'global' } {
   const hit = multiples.byCategory.get(p.category ?? 'Uncategorised');
@@ -260,8 +317,9 @@ export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   multiples: Multiples,
+  momentum: Momentum,
   model: ModelConstants = MODEL,
-): { implied: number; multiple: number; comps: number; source: 'category' | 'global'; growthPct: number; growthMult: number; enduranceMult: number; reachMult: number; age: number | null } {
+): { implied: number; multiple: number; comps: number; source: 'category' | 'global'; growthPct: number; growthMult: number; enduranceMult: number; reachMult: number; momentumPct: number; momentumMult: number; momentumSource: 'category' | 'global'; momentumComps: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const { multiple, comps, source } = multipleFor(protocol, multiples);
   const growthPct = clamp(finite(protocol.change_7d, 0), model.growth_floor, model.growth_cap);
@@ -269,8 +327,11 @@ export function impliedValue(
   const ageForModel = age ?? model.unknown_age_days;
   const enduranceMult = model.endurance_floor + (clamp(ageForModel, 0, model.endurance_days) / model.endurance_days) * model.endurance_range;
   const reachMult = 1 + model.reach_per_chain * Math.min(Math.max(protocol.chains.length - 1, 0), model.reach_max_extra_chains);
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * enduranceMult * reachMult));
-  return { implied, multiple, comps, source, growthPct, growthMult, enduranceMult, reachMult, age };
+  const mom = momentumFor(protocol, momentum);
+  const momentumPct = clamp(mom.momentum, model.growth_floor, model.growth_cap);
+  const momentumMult = 1 + (momentumPct / 100) * model.momentum_weight;
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * enduranceMult * reachMult * momentumMult));
+  return { implied, multiple, comps, source, growthPct, growthMult, enduranceMult, reachMult, momentumPct, momentumMult, momentumSource: mom.source, momentumComps: mom.comps, age };
 }
 
 /** The radar score's five parts and their sum: launch readiness, 0 to 100. */
@@ -410,6 +471,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const multiples = compMultiples(snapshot, model);
+  const momentum = categoryMomentum(snapshot, model);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, { p: SnapshotProtocol; tier: 'watchlist' | 'early' }>();
   // The watchlist is the floor: every slug is ranked, whatever the early filter says.
@@ -422,7 +484,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     if (!chosen.has(p.slug) && isRankableEarly(p)) chosen.set(p.slug, { p, tier: 'early' });
   }
   const scored = [...chosen.values()].map(({ p, tier }) => {
-    const v = impliedValue(p, snapshot.as_of, multiples, model);
+    const v = impliedValue(p, snapshot.as_of, multiples, momentum, model);
     const s = radarScore(p, multiples, v.age, model);
     return { p, tier, v, s };
   });
@@ -453,6 +515,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_multiplier: round4(row.v.growthMult),
       endurance_multiplier: round4(row.v.enduranceMult),
       reach_multiplier: round4(row.v.reachMult),
+      category_momentum_pct: round4(row.v.momentumPct),
+      momentum_multiplier: round4(row.v.momentumMult),
+      momentum_source: row.v.momentumSource,
+      momentum_comps: row.v.momentumComps,
       age_days: row.v.age,
     },
     farm_steps: farmSteps(row.p, row.v.age),
@@ -479,7 +545,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 }
 
 /** Per-category comp and board counts, for the dashboard's model section. */
-export function categoryStats(snapshot: Snapshot, board: BoardRow[], multiples: Multiples): CategoryStat[] {
+export function categoryStats(snapshot: Snapshot, board: BoardRow[], multiples: Multiples, momentum: Momentum): CategoryStat[] {
   const boardCounts = new Map<string, number>();
   for (const r of board) {
     const key = r.category ?? 'Uncategorised';
@@ -487,7 +553,15 @@ export function categoryStats(snapshot: Snapshot, board: BoardRow[], multiples: 
   }
   const stats: CategoryStat[] = [];
   for (const [category, info] of multiples.byCategory) {
-    stats.push({ category, live_protocols: info.comps, median_multiple: round4(info.multiple), board_protocols: boardCounts.get(category) ?? 0 });
+    const mom = momentum.byCategory.get(category) ?? { momentum: momentum.global, comps: 0, source: 'global' as const };
+    stats.push({
+      category,
+      live_protocols: info.comps,
+      median_multiple: round4(info.multiple),
+      board_protocols: boardCounts.get(category) ?? 0,
+      median_change_7d: mom.comps > 0 ? round4(mom.momentum) : null,
+      momentum_source: mom.source,
+    });
   }
   return stats.sort((a, b) => b.live_protocols - a.live_protocols || (a.category < b.category ? -1 : 1));
 }
@@ -495,6 +569,7 @@ export function categoryStats(snapshot: Snapshot, board: BoardRow[], multiples: 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const multiples = compMultiples(snapshot, model);
+  const momentum = categoryMomentum(snapshot, model);
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const radar: RadarData = {
@@ -504,11 +579,12 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model,
     model_version: MODEL_VERSION,
     global_multiple: round4(multiples.global),
+    global_momentum_pct: round4(momentum.global),
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: board.filter((r) => r.tier === 'early').length,
     live_size: live.length,
-    categories: categoryStats(snapshot, board, multiples),
+    categories: categoryStats(snapshot, board, multiples, momentum),
     rows: board,
     live,
   };
